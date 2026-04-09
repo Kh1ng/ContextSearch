@@ -13,7 +13,6 @@ Usage:
 """
 
 import sys
-import io
 import time
 import argparse
 import textwrap
@@ -31,25 +30,16 @@ from src.retriever import Retriever
 from src.tokenizer import count_tokens
 
 # ---------------------------------------------------------------------------
-# Output tee — mirrors stdout to a file
+# Dual output — plain text to terminal, markdown to report file
 # ---------------------------------------------------------------------------
 
-class _Tee:
-    """Write to both the real stdout and a file simultaneously."""
-    def __init__(self, real, file_handle):
-        self._real = real
-        self._fh = file_handle
+_md_out = None  # file handle assigned by __main__
 
-    def write(self, data):
-        self._real.write(data)
-        self._fh.write(data)
-
-    def flush(self):
-        self._real.flush()
-        self._fh.flush()
-
-    def fileno(self):
-        return self._real.fileno()
+def out(plain: str, md: str | None = None) -> None:
+    """Print plain text to the terminal; write markdown to the report file."""
+    print(plain)
+    if _md_out is not None:
+        _md_out.write((md if md is not None else plain) + "\n")
 
 # ---------------------------------------------------------------------------
 # Config
@@ -88,17 +78,20 @@ SYSTEM_PROMPT = (
 
 WIDTH = 72
 
-def hr(char="─"):
-    print("\n---\n")
+def hr():
+    out("─" * WIDTH, "\n---\n")
 
 def header(title: str):
-    print(f"\n# {title.strip()}\n")
+    t = title.strip()
+    out(f"\n{'═' * WIDTH}\n  {t}\n{'═' * WIDTH}", f"\n# {t}\n")
 
 def section(title: str):
-    print(f"\n### {title.strip()}\n")
+    t = title.strip()
+    out(f"\n  {t}\n  {'─' * (WIDTH - 4)}", f"\n### {t}\n")
 
 def wrap(text: str, indent: int = 4) -> str:
-    return textwrap.fill(text, width=WIDTH)
+    prefix = " " * indent
+    return textwrap.fill(text, width=WIDTH - indent, initial_indent=prefix, subsequent_indent=prefix)
 
 def token_bar(used: int, total: int, width: int = 30) -> str:
     filled = int((used / total) * width) if total else 0
@@ -157,10 +150,14 @@ def run_query_stats(retriever: Retriever, query: str, full_token_count: int):
     used_tokens = sum(c.token_count for c in results)
     savings_pct = (1 - used_tokens / full_token_count) * 100 if full_token_count else 0
 
-    print(f"\n**Query:** \"{query}\"\n")
+    out(f'\n  Query: "{query}"', f'\n**Query:** "{query}"\n')
 
     # --- Full context side ---
-    print(f"**FULL CONTEXT** — {full_token_count:,} tokens, {len(all_chunks)} chunks  {token_bar(full_token_count, full_token_count)}\n")
+    bar = token_bar(full_token_count, full_token_count)
+    out(
+        f"    FULL CONTEXT — {full_token_count:,} tokens, {len(all_chunks)} chunks  {bar}",
+        f"**FULL CONTEXT** — {full_token_count:,} tokens, {len(all_chunks)} chunks  {bar}\n",
+    )
 
     # Summarise by file so it doesn't scroll forever
     file_stats: dict[str, tuple[int, int]] = {}  # filename -> (chunk_count, token_sum)
@@ -169,17 +166,26 @@ def run_query_stats(retriever: Retriever, query: str, full_token_count: int):
         c, t = file_stats.get(fname, (0, 0))
         file_stats[fname] = (c + 1, t + chunk.token_count)
     for fname, (count, tokens) in sorted(file_stats.items()):
-        print(f"- `{fname}` — {count} chunks, {tokens:,} tokens")
+        out(
+            f"      [{fname}]  {count} chunks  {tokens:,} tok",
+            f"- `{fname}` — {count} chunks, {tokens:,} tokens",
+        )
 
-    print()
+    out("")
 
     # --- ContextSearch side ---
-    print(f"**CONTEXTSEARCH** — {used_tokens:,} tokens, {len(results)} chunks  "
-          f"{token_bar(used_tokens, full_token_count)}  ({savings_pct:.1f}% saved)\n")
+    bar2 = token_bar(used_tokens, full_token_count)
+    out(
+        f"    CONTEXTSEARCH — {used_tokens:,} tokens, {len(results)} chunks  {bar2}  ({savings_pct:.1f}% saved)",
+        f"**CONTEXTSEARCH** — {used_tokens:,} tokens, {len(results)} chunks  {bar2}  ({savings_pct:.1f}% saved)\n",
+    )
     for chunk in results:
         src = Path(chunk.source).name
         preview = chunk.text.replace("\n", " ")
-        print(f"- `{src}` — {chunk.token_count:>4} tok — \"{preview}\"")
+        out(
+            f"      [{src}]  {chunk.token_count:>4} tok  \"{preview}\"",
+            f"- `{src}` — {chunk.token_count:>4} tok — \"{preview}\"",
+        )
 
     return results
 
@@ -194,30 +200,39 @@ def run_llm_comparison(query: str, results, full_context: str, all_chunks: list,
     opt_tok = count_tokens(opt_prompt)
 
     section(f"FULL CONTEXT → LLM  ({len(all_chunks)} chunks, {full_tok:,} tokens sent)")
-    print(f"Calling `{model}`…\n")
+    out(f"    Calling {model}…", f"Calling `{model}`…\n")
     try:
         full_response, full_time = call_ollama(full_prompt, model)
-        print(f"**Time:** {full_time:.1f}s\n")
-        print(wrap(full_response))
+        out(f"    Time: {full_time:.1f}s\n", f"**Time:** {full_time:.1f}s\n")
+        out(wrap(full_response), full_response)
     except Exception as e:
-        print(f"> **ERROR:** {e}")
+        out(f"    ERROR: {e}", f"> **ERROR:** {e}")
         full_time = 0
 
     section(f"CONTEXTSEARCH → LLM  ({len(results)} chunks, {opt_tok:,} tokens sent)")
-    print(f"Calling `{model}`…\n")
+    out(f"    Calling {model}…", f"Calling `{model}`…\n")
     try:
         opt_response, opt_time = call_ollama(opt_prompt, model)
-        print(f"**Time:** {opt_time:.1f}s\n")
-        print(wrap(opt_response))
+        out(f"    Time: {opt_time:.1f}s\n", f"**Time:** {opt_time:.1f}s\n")
+        out(wrap(opt_response), opt_response)
     except Exception as e:
-        print(f"> **ERROR:** {e}")
+        out(f"    ERROR: {e}", f"> **ERROR:** {e}")
         opt_time = 0
 
     if full_time and opt_time:
         section("COMPARISON SUMMARY")
-        print(f"- **Chunks sent**: {len(all_chunks)} → {len(results)}  ({len(all_chunks) - len(results)} dropped)")
-        print(f"- **Token reduction**: {full_tok:,} → {opt_tok:,}  ({(1 - opt_tok/full_tok)*100:.1f}% fewer)")
-        print(f"- **Latency**: {full_time:.1f}s → {opt_time:.1f}s  ({full_time/opt_time:.1f}× faster, {(1 - opt_time/full_time)*100:.1f}% less)")
+        out(
+            f"    Chunks sent     : {len(all_chunks)} → {len(results)}  ({len(all_chunks) - len(results)} dropped)",
+            f"- **Chunks sent**: {len(all_chunks)} → {len(results)}  ({len(all_chunks) - len(results)} dropped)",
+        )
+        out(
+            f"    Token reduction : {full_tok:,} → {opt_tok:,}  ({(1 - opt_tok/full_tok)*100:.1f}% fewer)",
+            f"- **Token reduction**: {full_tok:,} → {opt_tok:,}  ({(1 - opt_tok/full_tok)*100:.1f}% fewer)",
+        )
+        out(
+            f"    Latency         : {full_time:.1f}s → {opt_time:.1f}s  ({full_time/opt_time:.1f}× faster, {(1 - opt_time/full_time)*100:.1f}% less)",
+            f"- **Latency**: {full_time:.1f}s → {opt_time:.1f}s  ({full_time/opt_time:.1f}× faster, {(1 - opt_time/full_time)*100:.1f}% less)",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +242,6 @@ def run_llm_comparison(query: str, results, full_context: str, all_chunks: list,
 def main():
     parser = argparse.ArgumentParser(description="ContextSearch real-world demo")
     parser.add_argument("--llm", action="store_true", help="Run LLM comparison via Ollama")
-    parser.add_argument("--easter-eggs", action="store_true", help="Run easter egg queries instead of default queries")
     parser.add_argument("--query", type=str, default=None, help="Run a single custom query")
     parser.add_argument("--budget", type=int, default=DEFAULT_BUDGET, help="Token budget for ContextSearch")
     parser.add_argument("--model", type=str, default=DEFAULT_MODEL, help="Ollama model name")
@@ -235,26 +249,32 @@ def main():
 
     # --- Load corpus ---
     header("ContextSearch — Real-World Demo")
-    print(f"- **Corpus**: `{CORPUS_DIR}`")
-    print(f"- **Budget**: {args.budget:,} tokens")
-    print(f"- **Model**: `{args.model}`")
+    out(f"  Corpus : {CORPUS_DIR}", f"- **Corpus**: `{CORPUS_DIR}`")
+    out(f"  Budget : {args.budget:,} tokens", f"- **Budget**: {args.budget:,} tokens")
+    out(f"  Model  : {args.model}", f"- **Model**: `{args.model}`")
 
     retriever = Retriever(token_budget=args.budget, strategy="markdown")
     retriever.load_corpus(CORPUS_DIR)
     num_chunks, total_tokens = load_corpus_stats(retriever)
 
-    print(f"- Loaded **{num_chunks} chunks** from {len(list(CORPUS_DIR.glob('*.md')))} files")
-    print(f"- Total corpus tokens: **{total_tokens:,}**")
+    out(
+        f"  Loaded {num_chunks} chunks from {len(list(CORPUS_DIR.glob('*.md')))} files",
+        f"- Loaded **{num_chunks} chunks** from {len(list(CORPUS_DIR.glob('*.md')))} files",
+    )
+    out(f"  Total corpus tokens: {total_tokens:,}", f"- Total corpus tokens: **{total_tokens:,}**")
 
     # --- Check Ollama if needed ---
     if args.llm:
-        print()
+        out("")
         if check_ollama(args.model):
-            print(f"- Ollama ✓  (`{args.model}` available)")
+            out(f"  Ollama OK  ({args.model} available)", f"- Ollama ✓  (`{args.model}` available)")
         else:
-            print(f"> **WARNING**: Ollama not reachable or model `{args.model}` not found.")
-            print(f"> Run: `ollama pull {args.model}`")
-            print(f"> Falling back to token stats only.")
+            out(
+                f"  WARNING: Ollama not reachable or model '{args.model}' not found.",
+                f"> **WARNING**: Ollama not reachable or model `{args.model}` not found.",
+            )
+            out(f"  Run:  ollama pull {args.model}", f"> Run: `ollama pull {args.model}`")
+            out("  Falling back to token stats only.", "> Falling back to token stats only.")
             args.llm = False
 
     # --- Build full context string (for LLM baseline) ---
@@ -263,19 +283,14 @@ def main():
     )
 
     # --- Run queries ---
-    if args.query:
-        queries = [args.query]
-    elif args.easter_eggs:
-        queries = EASTER_EGG_QUERIES
-    else:
-        queries = DEMO_QUERIES
+    queries = [args.query] if args.query else DEMO_QUERIES
 
     if args.llm:
         # LLM mode: one query at a time with full comparison
         query = queries[0]
         header("Query")
         results = run_query_stats(retriever, query, total_tokens)
-        print()
+        out("")
         run_llm_comparison(query, results, full_context, retriever._chunks, args.model)
 
         if len(queries) > 1:
@@ -297,10 +312,16 @@ def main():
         used = sum(c.token_count for c in r)
         all_savings.append((total_tokens - used) / total_tokens * 100)
     avg_savings = sum(all_savings) / len(all_savings)
-    print(f"- **Average token savings** across {len(queries)} queries: **{avg_savings:.1f}%**")
-    print(f"- Full corpus: **{total_tokens:,}** tokens → avg ContextSearch: **{total_tokens * (1 - avg_savings/100):,.0f}** tokens")
+    out(
+        f"  Average token savings across {len(queries)} queries: {avg_savings:.1f}%",
+        f"- **Average token savings** across {len(queries)} queries: **{avg_savings:.1f}%**",
+    )
+    out(
+        f"  Full corpus: {total_tokens:,} tokens  avg ContextSearch: {total_tokens * (1 - avg_savings/100):,.0f} tokens",
+        f"- Full corpus: **{total_tokens:,}** tokens → avg ContextSearch: **{total_tokens * (1 - avg_savings/100):,.0f}** tokens",
+    )
     hr()
-    print()
+    out("")
 
 
 if __name__ == "__main__":
@@ -310,9 +331,6 @@ if __name__ == "__main__":
     output_file = output_dir / f"{timestamp}.md"
     with output_file.open("w", encoding="utf-8") as _fh:
         _fh.write(f"<!-- Generated: {timestamp} -->\n\n")
-        sys.stdout = _Tee(sys.__stdout__, _fh)
-        try:
-            main()
-        finally:
-            sys.stdout = sys.__stdout__
-    print(f"Output saved to: {output_file}")
+        _md_out = _fh
+        main()
+    print(f"\nOutput saved to: {output_file}")
