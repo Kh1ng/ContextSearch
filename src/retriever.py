@@ -29,7 +29,17 @@ class Retriever:
         Read all .md and .txt files under corpus_path, chunk them, and index.
         Populates self._chunks.
         """
-        raise NotImplementedError
+        path = Path(corpus_path)
+
+        if path.is_dir():
+            files = list(path.glob("**/*.md")) + list(path.glob("**/*.txt"))
+        else:
+            files = [path]
+
+        for file_path in files:
+            text = file_path.read_text(encoding="utf-8")
+            chunks = self.chunker.chunk(text, source=str(file_path))
+            self._chunks.extend(chunks)
 
     def load_chunks(self, chunks: list[Chunk]) -> None:
         """Directly load pre-built chunks (used by the evaluation harness)."""

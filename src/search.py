@@ -27,7 +27,34 @@ def astar_search(
 
     Returns an ordered list of selected Chunk objects (highest relevance first).
     """
-    raise NotImplementedError
+    query_keywords = extract_keywords(query)
+
+    # Score every chunk and push onto a min-heap.
+    # f = token_count - relevance keeps low-cost, high-relevance chunks first.
+    # The index i is a tiebreaker so the heap never compares Chunk objects.
+    heap = []
+    for i, chunk in enumerate(chunks):
+        relevance = _keyword_overlap(chunk.keywords, query_keywords)
+
+        # Skip chunks with no keyword match -- they add tokens without value.
+        if relevance == 0.0:
+            continue
+
+        f = chunk.token_count - relevance
+        heapq.heappush(heap, (f, i, chunk))
+
+    selected = []
+    remaining = token_budget
+
+    while heap and remaining > 0:
+        _f, _i, chunk = heapq.heappop(heap)
+
+        # Only include the chunk if it fits in the remaining budget.
+        if chunk.token_count <= remaining:
+            selected.append(chunk)
+            remaining -= chunk.token_count
+
+    return selected
 
 
 def _keyword_overlap(chunk_keywords: set[str], query_keywords: set[str]) -> float:

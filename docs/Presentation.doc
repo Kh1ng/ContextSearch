@@ -15,3 +15,10 @@ Please upload your presentation files here. I will need the files at least 24 ho
 The code and report will be submitted separately in a different Dropbox.
 Students who fail to submit their presentation files at least 24 hours in advance will lose the full 20 points.
 During the presentation, students must clearly address the problem, the algorithm chosen, the results (visualization of the results if any or artifacts), and future work. The presentation should be concise and focused, with a maximum duration of 7 minutes, followed by 3 minutes for questions. Presentations must be clear, well-structured, and to the point.
+
+
+Overall idea:
+Take standard open claude project with 5 tools then compare the following:
+Tokens used, speed, # of tests passing
+Benchmark the responses via chunking to verify what context is included to verify it is using the tools it already has before it goes to reinvent the wheel so to sepeak.
+
