@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Data (SciFact download — too large for git)
+data/
+
+# Evaluation output
+results/
+
+# Environment
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
