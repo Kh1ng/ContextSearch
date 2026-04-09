@@ -16,7 +16,7 @@ class Retriever:
     def __init__(
         self,
         token_budget: int = 2048,
-        strategy: ChunkStrategy = "fixed",
+        strategy: ChunkStrategy = "markdown",
         chunk_size: int = 256,
         overlap: int = 32,
     ):
