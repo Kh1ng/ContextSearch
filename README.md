@@ -79,6 +79,8 @@ See [docs/evaluation.md](docs/evaluation.md) for metrics and methodology.
 - Colton Spurgin — chunking, tokenization, evaluation pipeline
 - Michael Ramirez — A\* search, retriever orchestration, tests
 
+_Much of the work was done collaboratively via live shared pair programming and git history is not a perfect reflection of individual contributions._
+
 ## License
 
 
