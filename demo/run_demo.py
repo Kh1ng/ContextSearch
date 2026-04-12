@@ -245,15 +245,22 @@ def main():
     parser.add_argument("--query", type=str, default=None, help="Run a single custom query")
     parser.add_argument("--budget", type=int, default=DEFAULT_BUDGET, help="Token budget for ContextSearch")
     parser.add_argument("--model", type=str, default=DEFAULT_MODEL, help="Ollama model name")
+    parser.add_argument(
+        "--heuristic",
+        choices=["cosine", "keyword"],
+        default="cosine",
+        help="Relevance heuristic: cosine (default, uses nomic-embed-text) or keyword (overlap)",
+    )
     args = parser.parse_args()
 
     # --- Load corpus ---
     header("ContextSearch — Real-World Demo")
-    out(f"  Corpus : {CORPUS_DIR}", f"- **Corpus**: `{CORPUS_DIR}`")
-    out(f"  Budget : {args.budget:,} tokens", f"- **Budget**: {args.budget:,} tokens")
-    out(f"  Model  : {args.model}", f"- **Model**: `{args.model}`")
+    out(f"  Corpus    : {CORPUS_DIR}", f"- **Corpus**: `{CORPUS_DIR}`")
+    out(f"  Budget    : {args.budget:,} tokens", f"- **Budget**: {args.budget:,} tokens")
+    out(f"  Model     : {args.model}", f"- **Model**: `{args.model}`")
+    out(f"  Heuristic : {args.heuristic}", f"- **Heuristic**: {args.heuristic}")
 
-    retriever = Retriever(token_budget=args.budget, strategy="markdown")
+    retriever = Retriever(token_budget=args.budget, strategy="markdown", heuristic=args.heuristic)
     retriever.load_corpus(CORPUS_DIR)
     num_chunks, total_tokens = load_corpus_stats(retriever)
 
