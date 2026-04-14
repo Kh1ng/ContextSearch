@@ -1,0 +1,38 @@
+{
+  "timestamp": "2026.04.12.122951",
+  "corpus_dir": "/Users/coltonspurgin/Developer/contextSearch/demo/corpus",
+  "model": "qwen2.5:14b-instruct",
+  "token_budget": 1024,
+  "total_corpus_tokens": 4857,
+  "total_chunks": 79,
+  "total_md_files": 7,
+  "llm_enabled": true,
+  "runs": [
+    {
+      "query": "...",
+      "mode": "vanilla",
+      "md_files_searched": 7,
+      "total_chunks_available": 79,
+      "chunks_sent": 79,
+      "corpus_tokens": 4857,
+      "prompt_tokens_sent": 4941,
+      "llm_latency_seconds": 54.07171607017517,
+      "token_savings_percent": 0,
+      "token_reduction_percent_vs_vanilla": 0,
+      "latency_reduction_percent_vs_vanilla": 0
+    },
+    {
+      "query": "...",
+      "mode": "enhanced",
+      "md_files_searched": 7,
+      "total_chunks_available": 79,
+      "chunks_sent": 0,
+      "corpus_tokens": 4857,
+      "prompt_tokens_sent": 35,
+      "llm_latency_seconds": 2.095320224761963,
+      "token_savings_percent": 100.0,
+      "token_reduction_percent_vs_vanilla": 99.3,
+      "latency_reduction_percent_vs_vanilla": 96.1
+    }
+  ]
+}

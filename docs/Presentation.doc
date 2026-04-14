@@ -3,12 +3,22 @@ Presentation Guidelines
 
     Total presentation time: 7 minutes
         Problem statement
+            Slide 2 Problem Statment high level
+            Slide 3 Explain Context Issue More
         Algorithm used (If any)
+            Slide 4 Determining what type of algorithm we need
         Justification for the approach
+            Slide 5 Explain A* Algorithm Choice
         Cost implications / trade-offs (If any for students working with LLM APIs)
+            Slide 6 Implications of trade offs (Why it works)
+            - skills now useable in homelab
+            - save on paid apis
         Evaluation
+            Slide 7 Screenshots of charts/visualizations aka quantitative
         Demo
+            Slide 8 Screenshots of output aka qualitative
         Conclusion
+            Slide 9 Conclusion as to other ways we can implement this and where else it could work
     Followed by 3 minutes for questions
 
 Please upload your presentation files here. I will need the files at least 24 hours before your scheduled presentation slot, as posted on Canvas under the Project 2 module.
