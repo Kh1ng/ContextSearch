@@ -10,7 +10,6 @@ Usage:
     python demo/run_demo.py --llm                   # include Ollama responses
     python demo/run_demo.py --llm --query "..."     # single custom query with LLM
     python demo/run_demo.py --model mistral         # different Ollama model
-    python demo/run_demo.py --llm --query "..." --sweep-md-files --min-files 1 --max-files 10
 """
 
 import sys
@@ -20,7 +19,6 @@ import textwrap
 from datetime import datetime
 from pathlib import Path
 
-import json
 import requests
 
 # Allow running from the project root or from demo/
@@ -49,7 +47,7 @@ def out(plain: str, md: str | None = None) -> None:
 
 CORPUS_DIR = Path(__file__).parent / "corpus"
 OLLAMA_URL = "http://localhost:11434/api/generate"
-DEFAULT_MODEL = "qwen2.5:14b-instruct"
+DEFAULT_MODEL = "qwen2.5"
 DEFAULT_BUDGET = 1024  # tokens fed to the LLM from ContextSearch
 
 DEMO_QUERIES = [
@@ -145,20 +143,6 @@ def load_corpus_stats(retriever: Retriever) -> tuple[int, int]:
     return len(retriever._chunks), total_tokens
 
 
-def get_corpus_files(corpus_dir: Path) -> list[Path]:
-    """Return sorted list of .md files in corpus_dir."""
-    return sorted(corpus_dir.glob("*.md"))
-
-
-def load_partial_corpus(retriever: Retriever, files: list[Path]) -> None:
-    """Load only the given files into retriever, replacing any existing chunks."""
-    chunks: list = []
-    for f in files:
-        text = f.read_text(encoding="utf-8")
-        chunks.extend(retriever.chunker.chunk(text, source=str(f)))
-    retriever.load_chunks(chunks)
-
-
 def run_query_stats(retriever: Retriever, query: str, full_token_count: int):
     """Print token comparison for one query. Returns selected chunks."""
     all_chunks = retriever._chunks
@@ -203,7 +187,7 @@ def run_query_stats(retriever: Retriever, query: str, full_token_count: int):
             f"- `{src}` — {chunk.token_count:>4} tok — \"{preview}\"",
         )
 
-    return results, used_tokens, savings_pct
+    return results
 
 
 def run_llm_comparison(query: str, results, full_context: str, all_chunks: list, model: str):
@@ -250,165 +234,14 @@ def run_llm_comparison(query: str, results, full_context: str, all_chunks: list,
             f"- **Latency**: {full_time:.1f}s → {opt_time:.1f}s  ({full_time/opt_time:.1f}× faster, {(1 - opt_time/full_time)*100:.1f}% less)",
         )
 
-    return full_tok, full_time, opt_tok, opt_time
-
-
-def run_single_benchmark(
-    query: str,
-    retriever: Retriever,
-    files: list[Path],
-    model: str,
-    use_llm: bool,
-) -> tuple[dict, dict]:
-    """Run vanilla + enhanced benchmark for one query against files.
-    Loads files into the retriever, runs query stats, optionally calls the LLM.
-    Returns (vanilla_record, enhanced_record).
-    """
-    load_partial_corpus(retriever, files)
-    num_chunks, total_tokens = load_corpus_stats(retriever)
-    num_md_files = len(files)
-    full_context = "\n\n---\n\n".join(f.read_text(encoding="utf-8") for f in files)
-
-    results, _used_tokens, savings_pct = run_query_stats(retriever, query, total_tokens)
-
-    if not results and retriever._chunks:
-        print(
-            f"  WARNING: retrieval returned 0 chunks for query \"{query}\" "
-            f"with {num_md_files} file(s) loaded ({num_chunks} chunks available). "
-            f"Query may contain no indexable keywords."
-        )
-
-    opt_ctx = "\n\n---\n\n".join(c.text for c in results)
-
-    if use_llm:
-        out("")
-        full_tok, full_time, opt_tok, opt_time = run_llm_comparison(
-            query, results, full_context, retriever._chunks, model
-        )
-        full_time = full_time if full_time > 0 else None
-        opt_time = opt_time if opt_time > 0 else None
-    else:
-        full_tok = count_tokens(build_prompt(full_context, query))
-        opt_tok = count_tokens(build_prompt(opt_ctx, query))
-        full_time = None
-        opt_time = None
-
-    vanilla_rec = build_run_record(
-        query=query, mode="vanilla",
-        md_files_searched=num_md_files,
-        total_chunks_available=num_chunks,
-        chunks_sent=num_chunks,
-        corpus_tokens=total_tokens,
-        prompt_tokens_sent=full_tok,
-        llm_latency_seconds=full_time,
-        token_savings_percent=0,
-        token_reduction_percent_vs_vanilla=0,
-        latency_reduction_percent_vs_vanilla=0,
-    )
-    enhanced_rec = build_run_record(
-        query=query, mode="enhanced",
-        md_files_searched=num_md_files,
-        total_chunks_available=num_chunks,
-        chunks_sent=len(results),
-        corpus_tokens=total_tokens,
-        prompt_tokens_sent=opt_tok,
-        llm_latency_seconds=opt_time,
-        token_savings_percent=round(savings_pct, 1),
-        token_reduction_percent_vs_vanilla=None,
-        latency_reduction_percent_vs_vanilla=None,
-    )
-    return vanilla_rec, compute_comparison_metrics(vanilla_rec, enhanced_rec)
-
-
-def run_sweep_benchmark(
-    queries: list[str],
-    all_files: list[Path],
-    retriever: Retriever,
-    model: str,
-    use_llm: bool,
-    min_files: int,
-    max_files: int,
-) -> list[dict]:
-    """Benchmark across corpus sizes N=min_files..max_files. Returns list of run records."""
-    max_n = min(max_files, len(all_files))
-    runs: list[dict] = []
-    for n in range(min_files, max_n + 1):
-        files = all_files[:n]
-        section(f"N={n} — {n} file{'s' if n != 1 else ''}")
-        for query in queries:
-            v_rec, e_rec = run_single_benchmark(query, retriever, files, model, use_llm)
-            runs.extend([v_rec, e_rec])
-    return runs
-
-
-# ---------------------------------------------------------------------------
-# JSON output helpers
-# ---------------------------------------------------------------------------
-
-def build_run_record(
-    query: str,
-    mode: str,
-    md_files_searched: int,
-    total_chunks_available: int,
-    chunks_sent: int,
-    corpus_tokens: int,
-    prompt_tokens_sent,
-    llm_latency_seconds,
-    token_savings_percent: float,
-    token_reduction_percent_vs_vanilla,
-    latency_reduction_percent_vs_vanilla,
-) -> dict:
-    return {
-        "query": query,
-        "mode": mode,
-        "md_files_searched": md_files_searched,
-        "total_chunks_available": total_chunks_available,
-        "chunks_sent": chunks_sent,
-        "corpus_tokens": corpus_tokens,
-        "prompt_tokens_sent": prompt_tokens_sent,
-        "llm_latency_seconds": llm_latency_seconds,
-        "token_savings_percent": token_savings_percent,
-        "token_reduction_percent_vs_vanilla": token_reduction_percent_vs_vanilla,
-        "latency_reduction_percent_vs_vanilla": latency_reduction_percent_vs_vanilla,
-    }
-
-
-def compute_comparison_metrics(vanilla: dict, enhanced: dict) -> dict:
-    """Return a copy of *enhanced* with vs-vanilla comparison fields filled in."""
-    v_tok = vanilla["prompt_tokens_sent"]
-    e_tok = enhanced["prompt_tokens_sent"]
-    v_lat = vanilla["llm_latency_seconds"]
-    e_lat = enhanced["llm_latency_seconds"]
-    result = dict(enhanced)
-    result["token_reduction_percent_vs_vanilla"] = (
-        round((1 - e_tok / v_tok) * 100, 1) if v_tok and e_tok else None
-    )
-    result["latency_reduction_percent_vs_vanilla"] = (
-        round((1 - e_lat / v_lat) * 100, 1) if v_lat and e_lat else None
-    )
-    return result
-
-
-def write_json_report(output_path, metadata: dict, runs: list) -> None:
-    """Write a pretty-printed JSON benchmark report to *output_path*."""
-    report = {**metadata, "runs": runs}
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(report, f, indent=2)
-
 
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
-def main(json_output_path=None, report_timestamp=""):
+def main():
     parser = argparse.ArgumentParser(description="ContextSearch real-world demo")
-    parser.add_argument("--llm", action="store_true", help="Run LLM comparison via Ollama")
-    parser.add_argument("--query", type=str, default=None, help="Run a single custom query")
     parser.add_argument("--budget", type=int, default=DEFAULT_BUDGET, help="Token budget for ContextSearch")
-    parser.add_argument("--model", type=str, default=DEFAULT_MODEL, help="Ollama model name")
-    parser.add_argument("--sweep-md-files", action="store_true", help="Sweep corpus sizes from --min-files to --max-files")
-    parser.add_argument("--min-files", type=int, default=1, help="Minimum corpus size for sweep (default: 1)")
-    parser.add_argument("--max-files", type=int, default=10, help="Maximum corpus size for sweep (default: 10)")
     parser.add_argument(
         "--heuristic",
         choices=["cosine", "keyword"],
@@ -416,6 +249,8 @@ def main(json_output_path=None, report_timestamp=""):
         help="Relevance heuristic: cosine (default, uses nomic-embed-text) or keyword (overlap)",
     )
     args = parser.parse_args()
+    args.llm = True
+    args.model = DEFAULT_MODEL
 
     # --- Load corpus ---
     header("ContextSearch — Real-World Demo")
@@ -424,16 +259,13 @@ def main(json_output_path=None, report_timestamp=""):
     out(f"  Model     : {args.model}", f"- **Model**: `{args.model}`")
     out(f"  Heuristic : {args.heuristic}", f"- **Heuristic**: {args.heuristic}")
 
-    all_files = get_corpus_files(CORPUS_DIR)
-    num_md_files = len(all_files)
-
     retriever = Retriever(token_budget=args.budget, strategy="markdown", heuristic=args.heuristic)
-    load_partial_corpus(retriever, all_files)
+    retriever.load_corpus(CORPUS_DIR)
     num_chunks, total_tokens = load_corpus_stats(retriever)
 
     out(
-        f"  Loaded {num_chunks} chunks from {num_md_files} files",
-        f"- Loaded **{num_chunks} chunks** from {num_md_files} files",
+        f"  Loaded {num_chunks} chunks from {len(list(CORPUS_DIR.glob('*.md')))} files",
+        f"- Loaded **{num_chunks} chunks** from {len(list(CORPUS_DIR.glob('*.md')))} files",
     )
     out(f"  Total corpus tokens: {total_tokens:,}", f"- Total corpus tokens: **{total_tokens:,}**")
 
@@ -451,92 +283,53 @@ def main(json_output_path=None, report_timestamp=""):
             out("  Falling back to token stats only.", "> Falling back to token stats only.")
             args.llm = False
 
-    runs: list[dict] = []
-    queries = [args.query] if args.query else DEMO_QUERIES
+    # --- Build full context string (for LLM baseline) ---
+    full_context = "\n\n---\n\n".join(
+        f.read_text(encoding="utf-8") for f in sorted(CORPUS_DIR.glob("*.md"))
+    )
 
-    if args.sweep_md_files:
-        # --- Corpus-size sweep mode ---
-        header("Corpus Size Sweep")
-        out(
-            f"  Sweeping N={args.min_files}..{min(args.max_files, num_md_files)} files × {len(queries)} {'query' if len(queries) == 1 else 'queries'}",
-            f"- Sweeping **N={args.min_files}..{min(args.max_files, num_md_files)}** files × **{len(queries)}** {'query' if len(queries) == 1 else 'queries'}",
-        )
-        runs = run_sweep_benchmark(
-            queries=queries,
-            all_files=all_files,
-            retriever=retriever,
-            model=args.model,
-            use_llm=args.llm,
-            min_files=args.min_files,
-            max_files=args.max_files,
-        )
-        n_sizes = min(args.max_files, num_md_files) - args.min_files + 1
-        hr()
-        section("Sweep Summary")
-        out(
-            f"  {n_sizes} corpus sizes × {len(queries)} {'query' if len(queries) == 1 else 'queries'} = {n_sizes * len(queries)} benchmarks ({len(runs)} run records)",
-            f"- **{n_sizes}** corpus sizes × **{len(queries)}** {'query' if len(queries) == 1 else 'queries'} = **{n_sizes * len(queries)}** benchmarks",
-        )
-        hr()
+    # --- Prompt for query ---
+    print("")
+    user_query = input("  Enter your query: ").strip()
+    queries = [user_query] if user_query else DEMO_QUERIES
+
+    if args.llm:
+        # LLM mode: one query at a time with full comparison
+        query = queries[0]
+        header("Query")
+        results = run_query_stats(retriever, query, total_tokens)
         out("")
+        run_llm_comparison(query, results, full_context, retriever._chunks, args.model)
+
+        if len(queries) > 1:
+            header("Remaining Queries (token stats only)")
+            for q in queries[1:]:
+                run_query_stats(retriever, q, total_tokens)
     else:
-        # --- Single-run mode (original behavior) ---
-        if args.llm:
-            query = queries[0]
-            header("Query")
-            v_rec, e_rec = run_single_benchmark(query, retriever, all_files, args.model, True)
-            runs.extend([v_rec, e_rec])
+        # Stats-only mode: all queries
+        header("Token Savings by Query")
+        for query in queries:
+            run_query_stats(retriever, query, total_tokens)
 
-            if len(queries) > 1:
-                header("Remaining Queries (token stats only)")
-                for q in queries[1:]:
-                    v_rec, e_rec = run_single_benchmark(q, retriever, all_files, args.model, False)
-                    runs.extend([v_rec, e_rec])
-        else:
-            header("Token Savings by Query")
-            for query in queries:
-                v_rec, e_rec = run_single_benchmark(query, retriever, all_files, args.model, False)
-                runs.extend([v_rec, e_rec])
-
-        # Reload full corpus so the summary query loop is accurate
-        load_partial_corpus(retriever, all_files)
-        current_chunks, current_tokens = load_corpus_stats(retriever)
-
-        hr()
-        section("Summary")
-        all_savings = []
-        for q in queries:
-            r = retriever.query(q)
-            used = sum(c.token_count for c in r)
-            all_savings.append((current_tokens - used) / current_tokens * 100)
-        avg_savings = sum(all_savings) / len(all_savings)
-        out(
-            f"  Average token savings across {len(queries)} queries: {avg_savings:.1f}%",
-            f"- **Average token savings** across {len(queries)} queries: **{avg_savings:.1f}%**",
-        )
-        out(
-            f"  Full corpus: {current_tokens:,} tokens  avg ContextSearch: {current_tokens * (1 - avg_savings/100):,.0f} tokens",
-            f"- Full corpus: **{current_tokens:,}** tokens → avg ContextSearch: **{current_tokens * (1 - avg_savings/100):,.0f}** tokens",
-        )
-        hr()
-        out("")
-
-    if json_output_path is not None:
-        metadata = {
-            "timestamp": report_timestamp,
-            "corpus_dir": str(CORPUS_DIR),
-            "model": args.model,
-            "token_budget": args.budget,
-            "total_corpus_tokens": total_tokens,
-            "total_chunks": num_chunks,
-            "total_md_files": num_md_files,
-            "llm_enabled": args.llm,
-        }
-        try:
-            write_json_report(json_output_path, metadata, runs)
-            print(f"  JSON written: {json_output_path}")
-        except Exception as exc:
-            print(f"  ERROR writing JSON: {exc}")
+    # --- Final summary ---
+    hr()
+    section("Summary")
+    all_savings = []
+    for q in queries:
+        r = retriever.query(q)
+        used = sum(c.token_count for c in r)
+        all_savings.append((total_tokens - used) / total_tokens * 100)
+    avg_savings = sum(all_savings) / len(all_savings)
+    out(
+        f"  Average token savings across {len(queries)} queries: {avg_savings:.1f}%",
+        f"- **Average token savings** across {len(queries)} queries: **{avg_savings:.1f}%**",
+    )
+    out(
+        f"  Full corpus: {total_tokens:,} tokens  avg ContextSearch: {total_tokens * (1 - avg_savings/100):,.0f} tokens",
+        f"- Full corpus: **{total_tokens:,}** tokens → avg ContextSearch: **{total_tokens * (1 - avg_savings/100):,.0f}** tokens",
+    )
+    hr()
+    out("")
 
 
 if __name__ == "__main__":
@@ -544,10 +337,8 @@ if __name__ == "__main__":
     output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y.%m.%d.%H%M%S")
     output_file = output_dir / f"{timestamp}.md"
-    json_output_file = output_dir / f"{timestamp}.json"
     with output_file.open("w", encoding="utf-8") as _fh:
         _fh.write(f"<!-- Generated: {timestamp} -->\n\n")
         _md_out = _fh
-        main(json_output_path=json_output_file, report_timestamp=timestamp)
-    print(f"\nReport saved to : {output_file}")
-    print(f"JSON saved to   : {json_output_file}")
+        main()
+    print(f"\nOutput saved to: {output_file}")
