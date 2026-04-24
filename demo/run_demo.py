@@ -409,18 +409,25 @@ def main(json_output_path=None, report_timestamp=""):
     parser.add_argument("--sweep-md-files", action="store_true", help="Sweep corpus sizes from --min-files to --max-files")
     parser.add_argument("--min-files", type=int, default=1, help="Minimum corpus size for sweep (default: 1)")
     parser.add_argument("--max-files", type=int, default=10, help="Maximum corpus size for sweep (default: 10)")
+    parser.add_argument(
+        "--heuristic",
+        choices=["cosine", "keyword"],
+        default="cosine",
+        help="Relevance heuristic: cosine (default, uses nomic-embed-text) or keyword (overlap)",
+    )
     args = parser.parse_args()
 
     # --- Load corpus ---
     header("ContextSearch — Real-World Demo")
-    out(f"  Corpus : {CORPUS_DIR}", f"- **Corpus**: `{CORPUS_DIR}`")
-    out(f"  Budget : {args.budget:,} tokens", f"- **Budget**: {args.budget:,} tokens")
-    out(f"  Model  : {args.model}", f"- **Model**: `{args.model}`")
+    out(f"  Corpus    : {CORPUS_DIR}", f"- **Corpus**: `{CORPUS_DIR}`")
+    out(f"  Budget    : {args.budget:,} tokens", f"- **Budget**: {args.budget:,} tokens")
+    out(f"  Model     : {args.model}", f"- **Model**: `{args.model}`")
+    out(f"  Heuristic : {args.heuristic}", f"- **Heuristic**: {args.heuristic}")
 
     all_files = get_corpus_files(CORPUS_DIR)
     num_md_files = len(all_files)
 
-    retriever = Retriever(token_budget=args.budget, strategy="markdown")
+    retriever = Retriever(token_budget=args.budget, strategy="markdown", heuristic=args.heuristic)
     load_partial_corpus(retriever, all_files)
     num_chunks, total_tokens = load_corpus_stats(retriever)
 

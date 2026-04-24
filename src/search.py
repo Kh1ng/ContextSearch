@@ -3,16 +3,19 @@
 # Owner: Michael Ramirez
 #
 # Given a query and a list of Chunks, returns the optimal subset of chunks
-# that maximises keyword-overlap relevance within a token budget.
+# that maximises heuristic relevance within a token budget.
 #
 # f(n) = g(n) + h(n)
 #   g(n) = cumulative token cost of chunks selected so far
-#   h(n) = keyword overlap score between chunk and query (higher = more relevant)
+#   h(n) = heuristic score for this chunk (higher = more relevant)
 #
-# The priority queue is ordered by -h(n)/g(n) so that high-relevance,
-# low-cost chunks are explored first.
+# The heuristic is injected as a callable so the search loop is agnostic
+# to whether relevance comes from keyword overlap or cosine similarity.
+# Passing heuristic_fn=None falls back to keyword overlap.
 
 import heapq
+from collections.abc import Callable
+
 from src.chunker import Chunk
 from src.tokenizer import extract_keywords
 
@@ -21,25 +24,30 @@ def astar_search(
     query: str,
     chunks: list[Chunk],
     token_budget: int,
+    heuristic_fn: Callable[[Chunk], float] | None = None,
 ) -> list[Chunk]:
     """
     Select chunks via A* to maximise relevance within token_budget.
 
+    heuristic_fn(chunk) -> float in [0, 1]
+        If None, defaults to keyword overlap against the query.
+
     Returns an ordered list of selected Chunk objects (highest relevance first).
     """
-    query_keywords = extract_keywords(query)
+    if heuristic_fn is None:
+        query_keywords = extract_keywords(query)
+        heuristic_fn = lambda chunk: _keyword_overlap(chunk.keywords, query_keywords)
 
-    # Score every chunk and push onto a min-heap.
-    # f = token_count - relevance keeps low-cost, high-relevance chunks first.
-    # The index i is a tiebreaker so the heap never compares Chunk objects.
     heap = []
     for i, chunk in enumerate(chunks):
-        relevance = _keyword_overlap(chunk.keywords, query_keywords)
+        relevance = heuristic_fn(chunk)
 
-        # Skip chunks with no keyword match -- they add tokens without value.
+        # Skip chunks with no relevance signal — they add tokens without value.
         if relevance == 0.0:
             continue
 
+        # f = token_count - relevance keeps low-cost, high-relevance chunks first.
+        # i is a tiebreaker so the heap never compares Chunk objects directly.
         f = chunk.token_count - relevance
         heapq.heappush(heap, (f, i, chunk))
 
@@ -48,8 +56,6 @@ def astar_search(
 
     while heap and remaining > 0:
         _f, _i, chunk = heapq.heappop(heap)
-
-        # Only include the chunk if it fits in the remaining budget.
         if chunk.token_count <= remaining:
             selected.append(chunk)
             remaining -= chunk.token_count

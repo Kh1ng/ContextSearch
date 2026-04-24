@@ -26,6 +26,7 @@ class Chunk:
     source: str               # originating file path
     index: int                # position in source document
     keywords: set[str] = field(default_factory=set)
+    embedding: list[float] | None = field(default=None, repr=False)
 
 
 class Chunker:

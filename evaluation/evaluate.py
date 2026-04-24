@@ -75,23 +75,13 @@ def mrr(retrieved: list[str], relevant: set[str]) -> float:
     return 0.0
 
 
-def run_evaluation(budget: int) -> dict:
+def run_evaluation(retriever: Retriever, budget: int, dataset, total_corpus_tokens: int) -> dict:
     """
     Run A* retrieval on all SciFact test queries at the given token budget.
+    Reuses a pre-loaded (and pre-embedded) retriever — only token_budget changes.
     Returns a dict of aggregated metrics.
     """
-    download_scifact()
-    dataset = load_scifact()
-
-    chunker = Chunker(strategy="markdown", chunk_size=256, overlap=32)
-    all_chunks = corpus_to_chunks(dataset.corpus, chunker)
-
-    flat_chunks = []
-    for doc_id, chunks in all_chunks.items():
-        flat_chunks.extend(chunks)
-
-    retriever = Retriever(token_budget=budget)
-    retriever.load_chunks(flat_chunks)
+    retriever.token_budget = budget
 
     recall_at_10_list = []
     precision_at_10_list = []
@@ -121,7 +111,6 @@ def run_evaluation(budget: int) -> dict:
     avg_mrr = sum(mrr_list) / len(mrr_list) if mrr_list else 0.0
     avg_tokens_used = sum(tokens_used_list) / len(tokens_used_list) if tokens_used_list else 0.0
 
-    total_corpus_tokens = sum(count_tokens(text) for text in dataset.corpus.values())
     token_savings = (total_corpus_tokens - avg_tokens_used) / total_corpus_tokens if total_corpus_tokens > 0 else 0.0
 
     return {
@@ -138,20 +127,46 @@ def run_evaluation(budget: int) -> dict:
 def main():
     parser = argparse.ArgumentParser(description="Evaluate ContextSearch on SciFact")
     parser.add_argument("--budget", type=int, default=None, help="Single token budget to test")
+    parser.add_argument(
+        "--heuristic",
+        choices=["cosine", "keyword"],
+        default="cosine",
+        help="Relevance heuristic (default: cosine)",
+    )
+    parser.add_argument("--out", type=str, default=None, help="Output JSON filename (default: eval_results.json)")
     args = parser.parse_args()
 
     budgets = [args.budget] if args.budget else BUDGETS
     RESULTS_DIR.mkdir(exist_ok=True)
 
+    # Load corpus and build embeddings ONCE — reused across all budget levels
+    print("Loading SciFact corpus...")
+    download_scifact()
+    dataset = load_scifact()
+
+    chunker = Chunker(strategy="markdown", chunk_size=256, overlap=32)
+    all_chunks = corpus_to_chunks(dataset.corpus, chunker)
+    flat_chunks = [c for chunks in all_chunks.values() for c in chunks]
+
+    total_corpus_tokens = sum(count_tokens(text) for text in dataset.corpus.values())
+
+    print(f"Corpus: {len(dataset.corpus)} docs, {len(flat_chunks)} chunks, {total_corpus_tokens:,} tokens")
+    print(f"Heuristic: {args.heuristic}")
+
+    retriever = Retriever(token_budget=budgets[0], heuristic=args.heuristic)
+    print("Building index (embeddings if cosine)...")
+    retriever.load_chunks(flat_chunks)
+    print("Index ready.")
+
     all_results = []
     for b in budgets:
         print(f"Running evaluation at budget={b}...")
-        result = run_evaluation(b)
+        result = run_evaluation(retriever, b, dataset, total_corpus_tokens)
         all_results.append(result)
-        print(f"  Recall@10: {result['recall_at_10']:.3f}  "
-              f"Token savings: {result['token_savings']:.1%}")
+        print(f"  Recall@10: {result['recall_at_10']:.3f}  Token savings: {result['token_savings']:.1%}")
 
-    out_path = RESULTS_DIR / "eval_results.json"
+    out_filename = args.out or ("eval_results_cosine.json" if args.heuristic == "cosine" else "eval_results.json")
+    out_path = RESULTS_DIR / out_filename
     out_path.write_text(json.dumps(all_results, indent=2))
     print(f"\nResults written to {out_path}")
 
